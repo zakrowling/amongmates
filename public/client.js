@@ -51,6 +51,8 @@
   let master = null;
   let sfxOn = (() => { try { return localStorage.getItem('amongmates-sfx') !== 'off'; } catch { return true; } })();
 
+  let reverb = null; // a long, dark space echo that every sound sends a little of itself into
+
   function getAudio() {
     if (!audioCtx) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -59,30 +61,69 @@
       master = audioCtx.createGain();
       master.gain.value = 0.5;
       master.connect(audioCtx.destination);
+      // Reverb from a generated impulse: 3.5 seconds of softly decaying stereo noise.
+      const len = Math.floor(audioCtx.sampleRate * 3.5);
+      const ir = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+      }
+      const conv = audioCtx.createConvolver();
+      conv.buffer = ir;
+      const tone = audioCtx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.frequency.value = 3200;
+      reverb = audioCtx.createGain();
+      reverb.gain.value = 0.9;
+      reverb.connect(conv).connect(tone).connect(master);
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
     return audioCtx;
   }
 
-  function tone(freq, { at = 0, dur = 0.2, type = 'sine', vol = 0.3, to = null, attack = 0.01 } = {}) {
+  // Sends a sound to the speakers plus some of it into the reverb.
+  function out(node, wet) {
+    node.connect(master);
+    if (wet > 0) {
+      const send = audioCtx.createGain();
+      send.gain.value = wet;
+      node.connect(send).connect(reverb);
+    }
+  }
+
+  // A soft tone: smooth attack and release, optionally gliding, slightly detuned for width.
+  function tone(freq, { at = 0, dur = 0.4, type = 'sine', vol = 0.2, to = null, attack = 0.02, wet = 0.35, detune = 0, lp = 0 } = {}) {
     const ac = getAudio();
     if (!ac) return;
     const t0 = ac.currentTime + at;
-    const o = ac.createOscillator();
     const g = ac.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t0);
-    if (to) o.frequency.exponentialRampToValueAtTime(to, t0 + dur);
     g.gain.setValueAtTime(0.0001, t0);
     g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    o.connect(g).connect(master);
-    o.start(t0);
-    o.stop(t0 + dur + 0.05);
+    let last = g;
+    if (lp) {
+      const f = ac.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = lp;
+      g.connect(f);
+      last = f;
+    }
+    out(last, wet);
+    (detune ? [-detune, detune] : [0]).forEach((cents) => {
+      const o = ac.createOscillator();
+      o.type = type;
+      o.detune.value = cents;
+      o.frequency.setValueAtTime(freq, t0);
+      if (to) o.frequency.exponentialRampToValueAtTime(to, t0 + dur);
+      o.connect(g);
+      o.start(t0);
+      o.stop(t0 + dur + 0.05);
+    });
   }
 
   let noiseBuf = null;
-  function noise({ at = 0, dur = 0.2, vol = 0.3, freq = 1000, to = null, q = 1 } = {}) {
+  // Filtered noise: air, wind and whooshes.
+  function noise({ at = 0, dur = 0.3, vol = 0.2, freq = 1000, to = null, q = 1, attack = 0.02, wet = 0.4, type = 'bandpass' } = {}) {
     const ac = getAudio();
     if (!ac) return;
     if (!noiseBuf) {
@@ -95,58 +136,95 @@
     src.buffer = noiseBuf;
     src.loop = true;
     const f = ac.createBiquadFilter();
-    f.type = 'bandpass';
+    f.type = type;
     f.Q.value = q;
     f.frequency.setValueAtTime(freq, t0);
     if (to) f.frequency.exponentialRampToValueAtTime(to, t0 + dur);
     const g = ac.createGain();
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    src.connect(f).connect(g).connect(master);
+    src.connect(f).connect(g);
+    out(g, wet);
     src.start(t0);
     src.stop(t0 + dur + 0.05);
   }
 
+  // A glassy chime: a sine with a faint, higher partial.
+  function chime(freq, at = 0, vol = 0.12, dur = 1.6) {
+    tone(freq, { at, dur, vol, attack: 0.005, wet: 0.6 });
+    tone(freq * 2.76, { at, dur: dur * 0.4, vol: vol * 0.25, attack: 0.005, wet: 0.6 });
+  }
+
+  // A slow, wide pad chord.
+  function pad(freqs, { at = 0, dur = 3, vol = 0.07, attack = 0.8, type = 'triangle', lp = 1800 } = {}) {
+    freqs.forEach((f) => tone(f, { at, dur, vol, attack, type, detune: 7, lp, wet: 0.7 }));
+  }
+
   const SOUNDS = {
+    // Launch: a deep swell and rush of air opening into a wide, shimmering chord.
     start() {
-      tone(110, { dur: 1.4, type: 'sawtooth', vol: 0.1, to: 55 });
-      [392, 523, 659, 784].forEach((f, i) => tone(f, { at: 0.35 + i * 0.12, dur: 0.9, type: 'triangle', vol: 0.14 }));
+      tone(41, { dur: 3.2, vol: 0.28, attack: 1.2, to: 55, wet: 0.3 });
+      noise({ dur: 2.6, vol: 0.12, freq: 200, to: 3500, q: 0.6, attack: 1.4, wet: 0.6 });
+      pad([110, 164.8, 220, 246.9, 329.6], { at: 0.9, dur: 4.2, vol: 0.06, attack: 1.1 });
+      [659.3, 987.8, 1318.5].forEach((f, i) => chime(f, 1.3 + i * 0.28, 0.06, 2.4));
     },
+    // A dull, heavy hit with a dark whoosh.
     kill() {
-      noise({ dur: 0.25, vol: 0.6, freq: 3000, to: 300, q: 0.8 });
-      tone(95, { dur: 0.4, type: 'square', vol: 0.25, to: 40 });
+      tone(110, { dur: 0.7, vol: 0.4, attack: 0.005, to: 35, wet: 0.5 });
+      noise({ dur: 0.6, vol: 0.25, freq: 2400, to: 180, q: 0.7, attack: 0.005, wet: 0.5 });
+      tone(233, { dur: 1.6, vol: 0.05, attack: 0.3, detune: 18, wet: 0.8 });
     },
+    // Emergency meeting: a slow rising siren, twice.
     meeting() {
-      [0, 0.22, 0.44, 0.66].forEach((t, i) => tone(i % 2 ? 660 : 880, { at: t, dur: 0.2, type: 'square', vol: 0.16 }));
+      [0, 0.9].forEach((t) => {
+        tone(392, { at: t, dur: 0.85, vol: 0.13, attack: 0.15, to: 784, detune: 6, wet: 0.6 });
+      });
+      tone(98, { dur: 2, vol: 0.18, attack: 0.3, wet: 0.5 });
     },
+    // Body reported: an uneasy, dissonant swell.
     body() {
-      for (let i = 0; i < 3; i++) tone(480, { at: i * 0.32, dur: 0.3, type: 'sawtooth', vol: 0.14, to: 1100 });
+      tone(65, { dur: 2.6, vol: 0.24, attack: 0.05, to: 52, wet: 0.5 });
+      pad([311.1, 329.6, 466.2], { dur: 2.4, vol: 0.06, attack: 0.25, type: 'sine' });
+      noise({ dur: 1.8, vol: 0.1, freq: 600, to: 120, q: 2, attack: 0.05, wet: 0.7 });
     },
+    // Task complete: three glassy chimes, rising.
     task() {
-      [660, 880, 1320].forEach((f, i) => tone(f, { at: i * 0.08, dur: 0.28, type: 'triangle', vol: 0.24 }));
+      [784, 1174.7, 1568].forEach((f, i) => chime(f, i * 0.11, 0.1));
     },
-    vote() { tone(1150, { dur: 0.07, type: 'square', vol: 0.1 }); },
-    click() { tone(720, { dur: 0.05, type: 'square', vol: 0.08 }); },
-    wrong() { tone(150, { dur: 0.28, type: 'square', vol: 0.14 }); },
+    vote() { chime(1318.5, 0, 0.06, 0.8); },
+    click() { tone(1046.5, { dur: 0.12, vol: 0.05, attack: 0.004, wet: 0.3 }); },
+    wrong() { tone(220, { dur: 0.45, vol: 0.12, attack: 0.01, to: 160, wet: 0.4 }); },
+    // Sabotage: a pulsing, low warning tone with a sweep of static.
     alarm() {
-      for (let i = 0; i < 2; i++) {
-        tone(440, { at: i * 0.5, dur: 0.25, type: 'sawtooth', vol: 0.14 });
-        tone(330, { at: i * 0.5 + 0.25, dur: 0.25, type: 'sawtooth', vol: 0.14 });
-      }
+      [0, 0.6, 1.2].forEach((t) => tone(220, { at: t, dur: 0.5, vol: 0.12, attack: 0.08, to: 207.7, detune: 10, lp: 1200, wet: 0.6 }));
+      noise({ dur: 1.8, vol: 0.06, freq: 1800, to: 400, q: 4, attack: 0.3, wet: 0.7 });
     },
-    beep() { tone(990, { dur: 0.12, type: 'square', vol: 0.09 }); },
+    // Reactor countdown: a sonar ping each second.
+    beep() { tone(1480, { dur: 0.6, vol: 0.05, attack: 0.004, wet: 0.7 }); },
     fixed() {
-      tone(523, { dur: 0.16, type: 'triangle', vol: 0.2 });
-      tone(784, { at: 0.13, dur: 0.35, type: 'triangle', vol: 0.2 });
+      tone(523.3, { dur: 1.2, vol: 0.1, attack: 0.05, wet: 0.6 });
+      tone(784, { at: 0.15, dur: 1.6, vol: 0.1, attack: 0.05, wet: 0.6 });
+      chime(1568, 0.3, 0.05);
     },
     vent() {
-      noise({ dur: 0.18, vol: 0.4, freq: 320, q: 3 });
-      tone(160, { dur: 0.16, type: 'square', vol: 0.14, to: 80 });
+      noise({ dur: 0.45, vol: 0.22, freq: 180, to: 900, q: 1.5, attack: 0.02, wet: 0.4 });
+      tone(70, { dur: 0.35, vol: 0.18, attack: 0.005, to: 45, wet: 0.3 });
     },
-    eject() { noise({ dur: 2.6, vol: 0.22, freq: 300, to: 2400, q: 0.7 }); },
-    win() { [523, 659, 784, 1047].forEach((f, i) => tone(f, { at: i * 0.15, dur: 0.55, type: 'triangle', vol: 0.22 })); },
-    lose() { [392, 330, 262, 196].forEach((f, i) => tone(f, { at: i * 0.22, dur: 0.55, type: 'sawtooth', vol: 0.1 })); },
+    // Ejected into space: a long rush of wind and a fading low drone.
+    eject() {
+      noise({ dur: 3, vol: 0.16, freq: 300, to: 2400, q: 0.7, attack: 0.4, wet: 0.7 });
+      tone(55, { dur: 3.5, vol: 0.15, attack: 0.6, to: 41, wet: 0.6 });
+    },
+    win() {
+      pad([130.8, 196, 261.6, 329.6, 392], { dur: 4, vol: 0.06, attack: 0.5 });
+      [523.3, 659.3, 784, 1046.5].forEach((f, i) => chime(f, 0.2 + i * 0.18, 0.08, 2.4));
+    },
+    lose() {
+      pad([110, 130.8, 164.8], { dur: 4, vol: 0.07, attack: 0.6, lp: 900 });
+      tone(55, { dur: 4, vol: 0.18, attack: 0.5, to: 41, wet: 0.6 });
+      [440, 392, 329.6].forEach((f, i) => chime(f, 0.4 + i * 0.4, 0.05, 2));
+    },
   };
 
   function play(key) {
@@ -1972,5 +2050,5 @@
   if (document.fonts) document.fonts.load(`44px ${FONT}`).then(() => { shipLayer = null; if (state.playing) buildShip(); }).catch(() => {});
 
   // Debug aid: ?debug exposes the client state.
-  if (DEBUG) window.__amongDebug = { state, send, socket, openMini, closeMini, showGameOver };
+  if (DEBUG) window.__amongDebug = { state, send, socket, openMini, closeMini, showGameOver, play };
 })();
