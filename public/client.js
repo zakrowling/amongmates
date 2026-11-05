@@ -1278,8 +1278,8 @@
     const y = state.you;
     if (!y) return;
     $('game-hint').textContent = y.role === 'imposter'
-      ? 'You\'re The Imposter: hold Shift to run, kill (Q), vent (V) and sabotage (F) without getting caught. Hang around the yellow consoles to fake your tasks. Map: M.'
-      : 'Hold Shift to run. Do your tasks at the yellow consoles (E), report bodies (R) and call meetings at the red button in the Cafeteria. Meetings happen on your own voice call: talk it over, then vote. Dead? Keep doing your tasks as a ghost. Map: M.';
+      ? 'You\'re The Imposter: kill (Q), vent (V) and sabotage (F) without getting caught. Fake tasks at the consoles. Map: M.'
+      : 'Do tasks at the yellow consoles (E), report bodies (R) and call meetings at the red button. Discuss on your voice call, then vote. Map: M.';
   }
 
   // ---------- Rendering the ship ----------
