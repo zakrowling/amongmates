@@ -167,6 +167,97 @@
   // Browsers only start audio after a click or key press.
   ['pointerdown', 'keydown'].forEach((ev) => window.addEventListener(ev, () => { if (sfxOn) getAudio(); }, { once: true }));
 
+  // ---------- Background music ----------
+  // Plays quietly on loop through each round (same volume as Candymates). At the end of the track
+  // it crossfades into the start again (two copies overlap for a moment), so the loop is seamless.
+  const music = (() => {
+    const VOLUME = 0.2;
+    const FADE = 2.5; // seconds of crossfade at the loop point (and fade in/out at start/stop)
+    const SRC = 'assets/sounds/mrwashingt0n-deep-work.mp3';
+    const tracks = [new Audio(SRC), new Audio(SRC)];
+    tracks.forEach((t) => { t.preload = 'auto'; t.volume = 0; });
+    let startedAt = 0; // performance.now() when the music started, or 0 when stopped
+    let fadeOutFrom = 0;
+    let timer = null;
+
+    const playTrack = (t) => { if (t.paused) t.play().catch(() => {}); };
+    const seek = (t, at) => { if (Math.abs(t.currentTime - at) > 0.3) t.currentTime = at; };
+
+    function update() {
+      if (fadeOutFrom) {
+        const k = 1 - (performance.now() - fadeOutFrom) / (FADE * 1000);
+        tracks.forEach((t) => { t.volume = Math.max(0, t.volume * Math.max(0, k)); });
+        if (k <= 0) halt();
+        return;
+      }
+      if (!startedAt) return;
+      const elapsed = (performance.now() - startedAt) / 1000;
+      const duration = tracks[0].duration;
+      if (!(duration > FADE * 2)) {
+        // Length not known yet: just start playing; the loop maths takes over once it's loaded.
+        playTrack(tracks[0]);
+        tracks[0].volume = VOLUME * Math.min(1, elapsed / FADE);
+        return;
+      }
+      const period = duration - FADE; // each loop starts as the previous one begins to fade
+      const loop = Math.floor(elapsed / period);
+      const at = elapsed - loop * period;
+      const cur = tracks[loop % 2];
+      const prev = tracks[(loop + 1) % 2];
+      playTrack(cur);
+      seek(cur, at);
+      cur.volume = VOLUME * Math.min(1, at / FADE);
+      if (loop > 0 && at < FADE) {
+        playTrack(prev);
+        seek(prev, at + period);
+        prev.volume = VOLUME * (1 - at / FADE);
+      } else if (!prev.paused) {
+        prev.pause();
+      }
+    }
+
+    function halt() {
+      clearInterval(timer);
+      timer = null;
+      startedAt = 0;
+      fadeOutFrom = 0;
+      tracks.forEach((t) => { t.pause(); t.volume = 0; });
+    }
+
+    // If autoplay was blocked, the next click or key press starts it.
+    ['pointerdown', 'keydown'].forEach((ev) => window.addEventListener(ev, () => { if (startedAt) update(); }));
+
+    return {
+      start() {
+        if (startedAt && !fadeOutFrom) return;
+        halt();
+        startedAt = performance.now();
+        timer = setInterval(update, 100);
+        update();
+      },
+      fadeOut() {
+        if (startedAt && !fadeOutFrom) fadeOutFrom = performance.now();
+      },
+      stop: halt,
+      setMuted(m) {
+        tracks.forEach((t) => { t.muted = m; });
+      },
+    };
+  })();
+
+  let musicOn = (() => { try { return localStorage.getItem('amongmates-music') !== 'off'; } catch { return true; } })();
+  function applyMusicPref() {
+    music.setMuted(!musicOn);
+    $('music-toggle').setAttribute('aria-pressed', String(musicOn));
+  }
+  $('music-toggle').addEventListener('click', () => {
+    musicOn = !musicOn;
+    try { localStorage.setItem('amongmates-music', musicOn ? 'on' : 'off'); } catch { /* private mode */ }
+    applyMusicPref();
+    $('music-toggle').blur();
+  });
+  applyMusicPref();
+
   // ---------- Drawing helpers ----------
 
   function rr(c, x, y, w, h, r) {
@@ -566,6 +657,7 @@
 
   function showLobby() {
     state.playing = false;
+    music.stop();
     closeMini();
     $('game-view').style.display = 'none';
     $('game-over').hidden = true;
@@ -757,6 +849,7 @@
 
   socket.on('gameStarted', (payload) => {
     enterGame(payload);
+    music.start();
     if (payload.phase === 'intro') play('start');
   });
   socket.on('state', (d) => {
@@ -1465,6 +1558,7 @@
       return li;
     }));
     $('game-over').hidden = false;
+    music.fadeOut();
     play(iWon ? 'win' : 'lose');
     sendMove();
   }
