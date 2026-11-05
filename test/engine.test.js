@@ -376,7 +376,8 @@ test('a dead NPC crewmate keeps doing its tasks as a ghost', () => {
   room.bodies = [];
   // Nobody calls meetings in the meantime.
   room.seats.forEach((s) => { if (s !== ghost && s.npc) s.npc.wait = 1e9; });
-  run(sec(120));
+  room.sabotageCooldown = 1e9;
+  run(sec(180));
   assert.ok(ghost.tasks.every((t) => t.done), `ghost finished ${ghost.tasks.filter((t) => t.done).length}/${ghost.tasks.length}`);
 });
 
@@ -393,6 +394,39 @@ test('an NPC that sees the kill reports it and votes the killer out', () => {
   run(sec(15) + 1);
   room.npcPlanVote(witness);
   assert.equal(witness.npc.voteFor, imp.n);
+});
+
+test('holding Shift runs at double speed', () => {
+  const { room, run } = started(2, 5);
+  freezeNpcs(room);
+  const me = seat(room, 'p1');
+  Object.assign(me, { x: 1220, y: 160 });
+  room.input('p1', { type: 'move', right: true });
+  run(4);
+  const walked = me.x - 1220;
+  Object.assign(me, { x: 1220, y: 160 });
+  room.input('p1', { type: 'move', right: true, run: true });
+  run(4);
+  assert.equal(me.x - 1220, walked * 2);
+});
+
+test('bots pile on to the front runner, and suspect whoever they saw near the victim', () => {
+  const { room, run } = started(2, 9);
+  freezeNpcs(room);
+  const crew = room.seats.filter((s) => s.kind === 'npc' && s.role === 'crew');
+  const [bot, suspect] = crew;
+  bot.seen.set(suspect.n, { tick: room.tick, x: 1000, y: 1000 });
+  room.kill(imposterOf(room), Object.assign(crew[2], { x: 1050, y: 1000 }));
+  assert.ok(room.npcSuspects(bot).some((x) => x.n === suspect.n), 'seen near the victim');
+  room.callMeeting(crew[3], 'emergency');
+  run(sec(15) + 1);
+  assert.equal(room.phase, 'vote');
+  // Three votes against one crewmate: an undecided bot joins in almost every time.
+  const target = crew[5];
+  [crew[6], crew[7], crew[8]].forEach((s) => room.castVote(s, target.n));
+  let joined = 0;
+  for (let i = 0; i < 50; i++) if (room.npcDecideVote(crew[9]) === target.n) joined++;
+  assert.ok(joined > 35, `joined ${joined}/50`);
 });
 
 test('a whole game plays out on its own and ends with a winner', () => {

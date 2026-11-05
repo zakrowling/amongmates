@@ -31,7 +31,7 @@
     latest: null, // the last state from the host
     phase: null,
     phaseAt: 0,
-    keys: { up: false, down: false, left: false, right: false },
+    keys: { up: false, down: false, left: false, right: false, run: false },
     joy: null,
     sentMove: '',
     showMap: false,
@@ -781,6 +781,8 @@
     if (p === state.phase) return;
     state.phase = p;
     state.phaseAt = performance.now();
+    // Your task list and buttons only show while you're out on the ship.
+    $('stage').classList.toggle('off-ship', p !== 'play');
     $('intro').hidden = p !== 'intro';
     $('meeting').hidden = !['discuss', 'vote', 'result'].includes(p);
     $('ejection').hidden = p !== 'ejection';
@@ -882,6 +884,7 @@
 
   const KEYMAP = {
     ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
+    ShiftLeft: 'run', ShiftRight: 'run',
   };
 
   function sendMove() {
@@ -894,15 +897,16 @@
       down: !blocked && (k.down || !!j.down),
       left: !blocked && (k.left || !!j.left),
       right: !blocked && (k.right || !!j.right),
+      run: !blocked && k.run,
     };
-    const key = `${+m.up}${+m.down}${+m.left}${+m.right}`;
+    const key = `${+m.up}${+m.down}${+m.left}${+m.right}${+m.run}`;
     if (key === state.sentMove) return;
     state.sentMove = key;
     send({ type: 'move', ...m });
   }
 
   function releaseKeys() {
-    state.keys = { up: false, down: false, left: false, right: false };
+    state.keys = { up: false, down: false, left: false, right: false, run: false };
     state.joy = null;
     sendMove();
   }
@@ -1103,8 +1107,8 @@
     const y = state.you;
     if (!y) return;
     $('game-hint').textContent = y.role === 'imposter'
-      ? 'You\'re The Imposter: kill (Q), vent (V) and sabotage (F) without getting caught. Hang around the yellow consoles to fake your tasks. Map: M.'
-      : 'Do your tasks at the yellow consoles (E), report bodies (R) and call meetings at the red button in the Cafeteria. Meetings happen on your own voice call: talk it over, then vote. Dead? Keep doing your tasks as a ghost. Map: M.';
+      ? 'You\'re The Imposter: hold Shift to run, kill (Q), vent (V) and sabotage (F) without getting caught. Hang around the yellow consoles to fake your tasks. Map: M.'
+      : 'Hold Shift to run. Do your tasks at the yellow consoles (E), report bodies (R) and call meetings at the red button in the Cafeteria. Meetings happen on your own voice call: talk it over, then vote. Dead? Keep doing your tasks as a ghost. Map: M.';
   }
 
   // ---------- Rendering the ship ----------

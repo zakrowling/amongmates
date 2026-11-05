@@ -16,8 +16,10 @@
   const SEATS = 15;
   const REAL_IMPOSTER_FROM = 4; // with fewer real players, an NPC is the Imposter
   const TASKS_EACH = 5;
-  const SPEED = 5; // px per tick
-  const GHOST_SPEED = 6;
+  const SPEED = 6.5; // walking, px per tick
+  const RUN = 2; // holding Shift runs at double speed
+  const GHOST_SPEED = 7.5;
+  const NPC_VISION = 280; // how far a bot notices who's around
   const RADIUS = 12;
   const KILL_RANGE = 75;
   const REPORT_RANGE = 110;
@@ -39,7 +41,7 @@
   const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
   const COLORS = [
-    ['Red', '#d8262b'], ['Blue', '#2747d6'], ['Green', '#1d8f3a'], ['Pink', '#ef5cbe'], ['Orange', '#f08a1c'],
+    ['Mint', '#56c6a9'], ['Red', '#d8262b'], ['Blue', '#2747d6'], ['Green', '#1d8f3a'], ['Pink', '#ef5cbe'], ['Orange', '#f08a1c'],
     ['Yellow', '#f1e04c'], ['Black', '#3d4550'], ['White', '#d9e2ee'], ['Purple', '#7a3dc8'], ['Brown', '#7a5230'],
     ['Cyan', '#3ee0d0'], ['Lime', '#69e04a'], ['Maroon', '#7a2a3e'], ['Rose', '#f0bfd2'], ['Tan', '#c9b48a'],
   ].map(([label, hex]) => ({ label, hex }));
@@ -201,6 +203,8 @@
           killCooldown: 0,
           ventCooldown: 0,
           witnessed: new Set(),
+          seen: new Map(), // bots: seat n -> { tick, x, y } of when they last saw them
+          sus: {}, // bots: how suspicious each seat is
           npc: p ? null : this.newNpcState(),
         });
       }
@@ -253,7 +257,7 @@
       const play = this.phase === 'play';
       switch (msg.type) {
         case 'move':
-          seat.input = { up: msg.up === true, down: msg.down === true, left: msg.left === true, right: msg.right === true };
+          seat.input = { up: msg.up === true, down: msg.down === true, left: msg.left === true, right: msg.right === true, run: msg.run === true };
           break;
         case 'task':
           if (play) this.completeTask(seat, msg.station);
@@ -346,6 +350,15 @@
         s.witnessed.add(killer.n);
         if (s.npc && s.npc.reportIn < 0) s.npc.reportIn = sec(1) + this.rand(sec(1));
       });
+      // Who was each bot seeing around the victim in the last few seconds? They're now suspects.
+      this.seats.forEach((s) => {
+        if (s.kind !== 'npc' || !s.alive || s.role !== 'crew') return;
+        s.seen.forEach((p, n) => {
+          if (n === victim.n || this.tick - p.tick > sec(12)) return;
+          const d = Math.hypot(p.x - victim.x, p.y - victim.y);
+          if (d < 320) s.sus[n] = (s.sus[n] || 0) + (d < 160 ? 3 : 2);
+        });
+      });
       this.events.push({ type: 'kill', killer: killer.n, victim: victim.n, x: victim.x, y: victim.y });
       this.sendPrivate(killer);
       if (victim.kind === 'player') this.sendPrivate(victim);
@@ -361,6 +374,10 @@
       seat.x = next.x;
       seat.y = next.y;
       seat.ventCooldown = sec(0.6);
+      // Bots who see someone pop in or out of a vent know exactly who it is.
+      this.seats.forEach((s) => {
+        if (s.kind === 'npc' && s.alive && s.role === 'crew' && (within(s, here, NPC_VISION) || within(s, next, NPC_VISION))) s.witnessed.add(seat.n);
+      });
       this.events.push({ type: 'vent', n: seat.n, from: here.id, to: next.id });
       return true;
     }
@@ -411,19 +428,61 @@
       return true;
     }
 
-    npcPlanVote(seat) {
-      const living = this.seats.filter((s) => s.alive && s.n !== seat.n);
-      let choice = 'skip';
+    // How suspicious this bot finds each living seat: an eyewitness is sure, otherwise it's whoever
+    // it saw hanging around the victim just before the kill.
+    npcSuspects(seat) {
+      const scores = {};
+      this.seats.forEach((o) => {
+        if (!o.alive || o.n === seat.n) return;
+        let score = seat.witnessed.has(o.n) ? 10 : 0;
+        score += seat.sus[o.n] || 0;
+        if (score > 0) scores[o.n] = score;
+      });
+      return Object.entries(scores).map(([n, score]) => ({ n: Number(n), score })).sort((a, b) => b.score - a.score);
+    }
+
+    // Who has the most votes so far (not counting skips), and how many.
+    voteLeader(excludeN) {
+      const counts = {};
+      Object.values(this.meeting.votes).forEach((t) => { if (t !== 'skip' && t !== excludeN) counts[t] = (counts[t] || 0) + 1; });
+      let leader = null;
+      let count = 0;
+      Object.entries(counts).forEach(([t, c]) => {
+        if (c > count) {
+          leader = Number(t);
+          count = c;
+        }
+      });
+      return { leader, count, cast: Object.keys(this.meeting.votes).length };
+    }
+
+    // Bots vote like people: anyone sure of who did it votes early, the rest listen to the room and
+    // pile on to the front runner (or follow their hunch), otherwise they skip.
+    npcDecideVote(seat) {
+      const { leader, count, cast } = this.voteLeader(seat.n);
+      const leaderOk = leader !== null && this.seats[leader] && this.seats[leader].alive;
       if (seat.role === 'imposter') {
-        const crew = living.filter((s) => s.role === 'crew');
-        if (crew.length && this.random() < 0.6) choice = crew[this.rand(crew.length)].n;
-      } else {
-        const seen = [...seat.witnessed].find((n) => this.seats[n].alive);
-        if (seen !== undefined) choice = seen;
-        else if (this.random() < 0.3 && living.length) choice = living[this.rand(living.length)].n;
+        // Blend in: go with the crowd, or push suspicion onto a random crewmate.
+        if (leaderOk && count >= 1) return leader;
+        const crew = this.seats.filter((s) => s.alive && s.role === 'crew');
+        return crew.length && this.random() < 0.45 ? crew[this.rand(crew.length)].n : 'skip';
       }
-      seat.npc.voteFor = choice;
-      seat.npc.voteAt = Math.max(sec(2), this.phaseTicks - sec(4) - this.rand(sec(16)));
+      const suspects = this.npcSuspects(seat);
+      const top = suspects[0];
+      if (top && top.score >= 4) return top.n;
+      if (leaderOk && count >= 2 && this.random() < Math.min(0.92, 0.45 + 0.12 * count + 0.02 * cast)) return leader;
+      if (top && top.score >= 1.5 && this.random() < 0.65) return top.n;
+      if (leaderOk && count >= 1 && this.random() < 0.35) return leader;
+      return 'skip';
+    }
+
+    npcPlanVote(seat) {
+      const top = seat.role === 'crew' ? this.npcSuspects(seat)[0] : null;
+      const sure = top && top.score >= 4;
+      seat.npc.voteFor = this.npcDecideVote(seat);
+      // Eyewitnesses speak up first; everyone else waits to see which way the room is leaning.
+      const after = sure ? sec(1) + this.rand(sec(4)) : sec(6) + this.rand(sec(18));
+      seat.npc.voteAt = Math.max(sec(2), this.phaseTicks - after);
     }
 
     finishVote() {
@@ -473,7 +532,8 @@
           s.x = MAP.SPAWNS[i].x;
           s.y = MAP.SPAWNS[i].y;
         }
-        s.witnessed.clear();
+        s.seen.clear();
+        Object.keys(s.sus).forEach((n) => { s.sus[n] /= 2; });
         if (s.role === 'imposter') s.killCooldown = KILL_COOLDOWN;
         if (s.npc) Object.assign(s.npc, this.newNpcState());
       });
@@ -534,7 +594,7 @@
       } else if (this.phase === 'vote') {
         this.seats.forEach((s) => {
           if (s.kind === 'npc' && s.alive && s.npc && s.npc.voteAt >= 0 && this.phaseTicks <= s.npc.voteAt && this.meeting.votes[s.n] === undefined) {
-            this.castVote(s, s.npc.voteFor);
+            this.castVote(s, this.npcDecideVote(s));
           }
         });
         if (--this.phaseTicks <= 0) this.finishVote();
@@ -553,6 +613,7 @@
         if (s.killCooldown > 0 && s.alive) s.killCooldown--;
         if (s.ventCooldown > 0) s.ventCooldown--;
         if (s.kind === 'npc') this.stepNpc(s);
+        if (this.tick % 5 === 0 && s.kind === 'npc' && s.alive && s.role === 'crew') this.npcLook(s);
         this.move(s);
       });
       // Reactor meltdown: someone has to stand at the panel for a few seconds.
@@ -596,7 +657,7 @@
       if (!s.moving) return;
       if (dx) s.facing = dx;
       const len = Math.hypot(dx, dy);
-      const speed = s.alive ? SPEED : GHOST_SPEED;
+      const speed = (s.alive ? SPEED : GHOST_SPEED) * (s.input.run ? RUN : 1);
       dx = (dx / len) * speed;
       dy = (dy / len) * speed;
       if (!s.alive) {
@@ -605,8 +666,12 @@
         s.y = Math.max(20, Math.min(MAP.HEIGHT - 20, s.y + dy));
         return;
       }
-      if (MAP.isWalkable(s.x + dx, s.y, RADIUS)) s.x += dx;
-      if (MAP.isWalkable(s.x, s.y + dy, RADIUS)) s.y += dy;
+      // Running moves in small steps, so nobody slips through a wall.
+      const steps = Math.ceil(speed / SPEED);
+      for (let i = 0; i < steps; i++) {
+        if (MAP.isWalkable(s.x + dx / steps, s.y, RADIUS)) s.x += dx / steps;
+        if (MAP.isWalkable(s.x, s.y + dy / steps, RADIUS)) s.y += dy / steps;
+      }
     }
 
     // ---------- NPCs ----------
@@ -644,7 +709,7 @@
             return;
           }
         }
-        if (!this.sabotage && this.sabotageCooldown <= 0 && this.random() < 0.002) this.startSabotage(s, 'lights');
+        if (!this.sabotage && this.sabotageCooldown <= 0 && this.random() < 0.002) this.startSabotage(s, this.random() < 0.4 ? 'reactor' : 'lights');
       }
       if (npc.wait > 0) {
         npc.wait--;
@@ -689,6 +754,17 @@
       }
       npc.lastX = s.x;
       npc.lastY = s.y;
+    }
+
+    // Remember who's around (and where), and be wary of anyone standing over a body.
+    npcLook(s) {
+      this.seats.forEach((o) => {
+        if (o === s || !o.alive || !within(s, o, NPC_VISION)) return;
+        s.seen.set(o.n, { tick: this.tick, x: o.x, y: o.y });
+        if (this.bodies.some((b) => within(o, b, 90) && within(s, b, NPC_VISION))) {
+          s.sus[o.n] = Math.min(6, (s.sus[o.n] || 0) + 0.5);
+        }
+      });
     }
 
     // A dead crewmate NPC floats (through walls) from task to task, like a player's ghost.
@@ -756,7 +832,7 @@
       if (goal.station) {
         // Spend a moment on the task. (The Imposter just pretends.)
         const station = goal.station;
-        npc.wait = sec(2) + this.rand(sec(3));
+        npc.wait = sec(4) + this.rand(sec(5));
         // Ghosts finish their tasks too (and the Imposter's are fake, so they never count).
         npc.onWaitDone = () => this.completeTask(s, station);
       } else if (goal.hunt) {
