@@ -16,9 +16,9 @@
   const SEATS = 15;
   const REAL_IMPOSTER_FROM = 4; // with fewer real players, an NPC is the Imposter
   const TASKS_EACH = 5;
-  const SPEED = 6.5; // walking, px per tick
+  const SPEED = 7.5; // walking, px per tick
   const RUN = 2; // holding Shift runs at double speed
-  const GHOST_SPEED = 7.5;
+  const GHOST_SPEED = 8.6;
   const NPC_VISION = 280; // how far a bot notices who's around
   const RADIUS = 12;
   const KILL_RANGE = 75;
