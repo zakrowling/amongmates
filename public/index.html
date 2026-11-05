@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Among Mates</title>
+  <meta name="description" content="Social deduction in space for 2-8 mates, with crewmate bots filling the ship. Find The Imposter before it's too late.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Just+Another+Hand&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #070a17;
+      --card: #141a2e;
+      --line: #2f3a5c;
+      --text: #f4f6ff;
+      --muted: #b4bdd8;
+      --red: #c8213a;
+      --red-hi: #e0334d;
+      --cyan: #3fd0f0;
+      --green: #3fdc7a;
+      --yellow: #ffd23f;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: 'Just Another Hand', 'Comic Sans MS', cursive;
+      font-size: 26px;
+      line-height: 1.1;
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 18px 12px 40px;
+      overflow-x: hidden;
+    }
+    #stars { position: fixed; inset: 0; z-index: -1; width: 100%; height: 100%; }
+    button, input { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+
+    header { text-align: center; margin-bottom: 10px; }
+    h1 { margin: 0; line-height: 0; }
+    #logo-img { width: 100%; max-width: 420px; height: auto; }
+    #logo { display: inline-block; font-size: 84px; line-height: 1; letter-spacing: 2px; }
+    .subtitle { margin: 6px 0 0; color: var(--muted); font-size: 28px; }
+
+    .card {
+      background: rgba(20, 26, 46, 0.94);
+      border: 3px solid var(--line);
+      border-radius: 22px;
+      padding: 22px 26px;
+      width: 100%;
+      max-width: 620px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+      text-align: center;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+      padding: 8px 18px 4px;
+      font-size: 34px;
+      letter-spacing: 1px;
+      border: 3px solid #000;
+      border-radius: 16px;
+      background: var(--red);
+      color: #fff;
+      box-shadow: 0 5px 0 #000;
+      transition: transform 0.08s, box-shadow 0.08s, background 0.15s;
+    }
+    .btn:hover:not(:disabled) { background: var(--red-hi); }
+    .btn:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 1px 0 #000; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.secondary { background: var(--cyan); color: #06121a; }
+    .btn.secondary:hover:not(:disabled) { background: #7fe3f8; }
+    .btn.outline { background: transparent; color: var(--text); border-color: var(--line); box-shadow: none; }
+    .btn.ghost { background: transparent; color: var(--muted); border: none; box-shadow: none; font-size: 28px; }
+    .btn.ghost:hover:not(:disabled) { background: transparent; color: var(--text); text-decoration: underline; }
+    .btn:focus-visible, .mode-option:focus-visible, .tile:focus-visible, .icon-btn:focus-visible, .act:focus-visible {
+      outline: 3px solid var(--yellow); outline-offset: 3px;
+    }
+
+    .or { color: var(--muted); margin: 6px 0; }
+    #room-input {
+      display: block; width: 100%; margin: 10px 0; padding: 6px 14px 2px;
+      font-size: 44px; text-align: center; letter-spacing: 10px; text-transform: uppercase;
+      background: #0b1022; border: 3px solid var(--line); border-radius: 16px; color: var(--text);
+    }
+    #room-input::placeholder { color: #66708f; }
+    .hint { color: var(--muted); font-size: 24px; margin: 8px 0; }
+    .error { color: #ff8a9a; min-height: 1em; margin: 8px 0 0; }
+
+    .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+    .slot {
+      position: relative; border: 3px dashed var(--line); border-radius: 16px; padding: 6px 4px 6px;
+      color: #66708f; min-height: 132px; display: flex; flex-direction: column; align-items: center;
+    }
+    .slot.filled { border-style: solid; background: rgba(255, 255, 255, 0.03); }
+    .slot.you { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.15) inset; }
+    .slot canvas { width: 64px; height: 72px; }
+    .slot-num { position: absolute; top: 4px; left: 8px; font-size: 20px; color: #66708f; }
+    .slot-name { font-size: 28px; line-height: 1; }
+    .slot-tag { font-size: 18px; color: var(--muted); min-height: 18px; }
+    .lobby-info { color: var(--muted); font-size: 23px; margin: 4px 0 8px; }
+
+    .room-label { color: var(--muted); margin-top: 12px; }
+    .room-display { font-size: 72px; letter-spacing: 12px; line-height: 1; }
+    .room-display.long { font-size: 48px; letter-spacing: 4px; }
+    .share { display: flex; gap: 8px; align-items: center; }
+    .share input { flex: 1; min-width: 0; padding: 6px 10px 2px; background: #0b1022; border: 3px solid var(--line); border-radius: 12px; font-size: 22px; }
+    .share .btn { width: auto; margin: 0; font-size: 26px; padding: 4px 16px 0; }
+    .link-only { display: none; }
+    #lobby-card.link-room .room-details { display: none; }
+    #lobby-card.link-room .link-only { display: block; }
+
+    /* ---------- Game ---------- */
+    #game-view { display: none; width: 100%; max-width: 1032px; position: relative; }
+    body.in-game header { display: none; }
+    body.in-game { padding-top: 10px; }
+    .stage { position: relative; width: 100%; aspect-ratio: 1032 / 645; border: 3px solid #000; border-radius: 18px; overflow: hidden; background: #000; touch-action: none; }
+    #game-canvas { display: block; width: 100%; height: 100%; }
+    .hud-tl { position: absolute; top: 10px; left: 10px; width: 300px; pointer-events: none; }
+    .stage.map-open .hud-tl, .stage.map-open .actions { display: none; }
+    .taskbar { background: rgba(0, 0, 0, 0.65); border: 2px solid #000; border-radius: 8px; padding: 3px 8px 4px; }
+    .taskbar-label { font-size: 20px; color: #e6ebff; }
+    .taskbar-track { height: 14px; background: #2a3045; border: 2px solid #000; border-radius: 5px; overflow: hidden; }
+    #taskbar-fill { height: 100%; width: 0; background: var(--green); transition: width 0.4s; }
+    #task-list { margin: 6px 0 0; padding: 6px 10px; list-style: none; background: rgba(0, 0, 0, 0.55); border-radius: 8px; font-size: 21px; }
+    #task-list li.done { color: var(--green); text-decoration: line-through; }
+    #task-list li.head { color: #ff6f82; }
+    .hud-tr { position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; align-items: flex-start; }
+    #room-name { background: rgba(0, 0, 0, 0.6); padding: 2px 12px 0; border-radius: 8px; font-size: 26px; }
+    .icon-btn { width: 42px; height: 42px; border-radius: 10px; border: 2px solid #000; background: rgba(20, 26, 46, 0.9); display: grid; place-items: center; padding: 0; color: #fff; font-size: 22px; }
+    .icon-btn svg { width: 24px; height: 24px; }
+    .icon-btn[aria-pressed="false"] { opacity: 0.55; }
+    .icon-btn .off-slash { display: none; }
+    .icon-btn[aria-pressed="false"] .off-slash { display: inline; }
+    .icon-btn[aria-pressed="false"] .on-waves { display: none; }
+
+    #banner {
+      position: absolute; top: 58px; left: 50%; transform: translateX(-50%);
+      background: rgba(150, 0, 20, 0.85); border: 2px solid #000; border-radius: 10px;
+      padding: 2px 16px 0; font-size: 28px; white-space: nowrap; animation: blink 1s infinite;
+    }
+    @keyframes blink { 50% { background: rgba(90, 0, 10, 0.85); } }
+
+    .actions { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 8px; align-items: flex-end; }
+    .act {
+      position: relative; width: 82px; height: 82px; border-radius: 50%; border: 3px solid #000;
+      background: #d9dde8; color: #10131f; font-size: 26px; line-height: 1; padding: 0;
+      box-shadow: 0 4px 0 #000; display: grid; place-items: center;
+    }
+    .act:disabled { opacity: 0.35; cursor: default; }
+    .act small { display: block; font-size: 15px; color: #39405a; }
+    .act.kill { background: #ff4d63; color: #fff; }
+    .act.kill small, .act.sab small { color: #ffe1e5; }
+    .act.report { background: #ffcf3f; }
+    .act.sab { background: #7a1f2d; color: #fff; }
+    .act .cd { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; background: rgba(0, 0, 0, 0.55); font-size: 44px; color: #fff; text-shadow: 0 2px 0 #000; }
+    .act-wrap { position: relative; }
+    #sab-menu { position: absolute; bottom: 92px; right: 0; display: flex; flex-direction: column; gap: 6px; }
+    #sab-menu button { width: 150px; border-radius: 10px; border: 2px solid #000; background: #2a0d14; color: #fff; padding: 4px 8px 0; font-size: 24px; }
+    #sab-menu button:disabled { opacity: 0.4; }
+    .keys { position: absolute; left: 10px; bottom: 8px; font-size: 20px; color: rgba(255, 255, 255, 0.7); text-shadow: 0 1px 0 #000; pointer-events: none; }
+
+    .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    #intro { background: #000; }
+    #intro h2 { margin: 0; font-size: 110px; line-height: 1; }
+    #intro p { margin: 8px 0 0; font-size: 34px; color: #e6ebff; }
+    #intro canvas { width: 220px; height: 150px; }
+    #splash { background: rgba(0, 0, 0, 0.7); pointer-events: none; z-index: 4; }
+    #splash h2 { margin: 0; font-size: 96px; color: #ff4d63; text-shadow: 0 4px 0 #000; transform: rotate(-4deg); }
+    #splash p { font-size: 34px; margin: 4px 0 0; }
+    #splash canvas { width: 160px; height: 120px; }
+
+    #meeting { background: rgba(5, 8, 20, 0.9); padding: 14px; }
+    .meeting-panel { width: 100%; max-width: 900px; background: #b8c3d8; color: #10131f; border: 4px solid #000; border-radius: 18px; padding: 10px 14px 12px; }
+    .meeting-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+    .meeting-head h2 { margin: 0; font-size: 42px; }
+    #meeting-timer { font-size: 30px; }
+    #meeting-sub { margin: 0 0 6px; font-size: 24px; text-align: left; color: #2a3048; }
+    #tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .tile {
+      position: relative; display: flex; align-items: center; gap: 6px; text-align: left;
+      background: #eef2fa; border: 3px solid #000; border-radius: 10px; padding: 2px 6px; min-height: 46px; color: #10131f;
+    }
+    .tile canvas { width: 34px; height: 38px; flex: none; }
+    .tile .t-name { font-size: 26px; flex: 1; }
+    .tile.dead { background: #8a93a8; opacity: 0.75; cursor: default; }
+    .tile.dead .t-name { text-decoration: line-through; }
+    .tile.me { box-shadow: 0 0 0 3px #fff inset; }
+    .tile.picked { background: #fff3b8; }
+    .tile .badge { font-size: 18px; background: #10131f; color: #fff; border-radius: 6px; padding: 1px 6px 0; }
+    .tile .votes, .skip-votes { display: flex; flex-wrap: wrap; gap: 2px; }
+    .vote-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #000; display: inline-block; }
+    .tile.caller::after { content: '📣'; position: absolute; top: -10px; right: -6px; font-size: 20px; }
+    .meeting-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 10px; }
+    #skip-btn { width: auto; margin: 0; font-size: 28px; padding: 4px 18px 0; }
+    #confirm-vote { width: auto; margin: 0; font-size: 28px; padding: 4px 18px 0; }
+    .voice { font-size: 24px; color: #2a3048; text-align: left; }
+
+    #ejection { background: #000; overflow: hidden; }
+    #ejection canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #ejection p { position: relative; font-size: 52px; margin: 0; text-shadow: 0 3px 0 #000; }
+
+    #minigame { background: rgba(0, 0, 0, 0.6); }
+    .mini-panel { position: relative; background: #39405a; border: 4px solid #000; border-radius: 16px; padding: 8px; }
+    .mini-panel h3 { margin: 0 0 4px; font-size: 30px; font-weight: normal; }
+    #mini-canvas { display: block; width: 480px; height: 340px; max-width: 80vw; height: auto; aspect-ratio: 480 / 340; background: #1b2033; border-radius: 10px; touch-action: none; }
+    #mini-close { position: absolute; top: -16px; right: -16px; width: 40px; height: 40px; border-radius: 50%; border: 3px solid #000; background: #ff4d63; color: #fff; font-size: 26px; padding: 0; }
+    #mini-msg { min-height: 28px; margin: 4px 0 0; font-size: 24px; }
+
+    #map-overlay { background: rgba(0, 0, 0, 0.55); pointer-events: none; }
+
+    #game-over { position: absolute; inset: 0; margin: auto; height: fit-content; max-height: 96%; overflow: auto; max-width: 560px; z-index: 5; background: #141a2e; }
+    #game-over h3 { margin: 0; font-size: 72px; line-height: 1; }
+    #game-over p { margin: 4px 0 8px; color: var(--muted); }
+    .player-list { list-style: none; margin: 0 0 6px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+    .player-item { display: flex; justify-content: space-between; gap: 4px; padding: 2px 8px 0; border-radius: 8px; border-left: 8px solid; font-size: 22px; color: #fff; }
+    .player-item.imp { outline: 2px solid #ff4d63; }
+    .player-item.out { opacity: 0.6; }
+    #game-hint { font-size: 22px; text-align: center; color: var(--muted); max-width: 1000px; margin: 8px auto 0; }
+
+    @media (max-width: 640px) {
+      body { font-size: 22px; }
+      .slots { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+      .slot { min-height: 112px; }
+      .slot-name { font-size: 22px; }
+      .hud-tl { width: 190px; }
+      #task-list { display: none; }
+      .act { width: 58px; height: 58px; font-size: 20px; }
+      .act small { display: none; }
+      #tiles { grid-template-columns: repeat(2, 1fr); }
+      #intro h2 { font-size: 64px; }
+      .player-list { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="stars" aria-hidden="true"></canvas>
+  <header>
+    <!-- The text title shows until the logo image loads. -->
+    <h1>
+      <img id="logo-img" src="assets/image/amongmates-logo.png?v=__BUILD__" alt="Among Mates" hidden
+        onload="this.hidden = false; document.getElementById('logo').hidden = true;">
+      <span id="logo" aria-label="Among Mates">AMONG MATES</span>
+    </h1>
+    <p class="subtitle">Find The Imposter. 2 to 8 mates, plus crewmate bots.</p>
+  </header>
+
+  <div id="lobby-card" class="card">
+    <div class="slots" id="slots"></div>
+
+    <div id="setup-view">
+      <button class="btn" id="create-btn">Create Room</button>
+      <div class="or">- OR -</div>
+      <input type="text" id="room-input" maxlength="4" placeholder="CODE" autocomplete="off" aria-label="Room code">
+      <button class="btn secondary" id="join-btn">Join Room</button>
+    </div>
+    <p class="hint" id="connecting-hint" style="display:none;">Connecting...</p>
+
+    <div id="room-view" style="display:none;">
+      <p class="lobby-info" id="lobby-info"></p>
+      <button class="btn" id="start-btn">Start Game</button>
+      <button class="btn outline link-only" id="home-btn">Create or join a new room</button>
+      <p class="hint" id="reconnect-hint" style="display:none;"></p>
+      <!-- Room code details are hidden for link rooms like /amongmates/mate -->
+      <div class="room-details">
+        <div class="room-label">Room Code</div>
+        <div class="room-display" id="room-code-txt">----</div>
+        <div class="share">
+          <input type="text" id="share-link" readonly aria-label="Invite link">
+          <button class="btn secondary" id="copy-btn">Copy</button>
+        </div>
+        <p class="hint share-hint">Send this link to your mates. They join straight away, no code needed.</p>
+        <button class="btn ghost" id="leave-btn">Leave Room</button>
+      </div>
+    </div>
+
+    <p class="error" id="error-msg" role="alert"></p>
+  </div>
+
+  <div id="game-view">
+    <div class="stage" id="stage">
+      <canvas id="game-canvas" width="1032" height="645"></canvas>
+
+      <div class="hud-tl">
+        <div class="taskbar">
+          <div class="taskbar-label">TOTAL TASKS COMPLETED</div>
+          <div class="taskbar-track"><div id="taskbar-fill"></div></div>
+        </div>
+        <ul id="task-list"></ul>
+      </div>
+      <div class="hud-tr">
+        <div id="room-name">Cafeteria</div>
+        <button type="button" class="icon-btn" id="map-btn" aria-pressed="false" aria-label="Map" title="Map (M)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14 M15 6v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="leave-game-btn" aria-label="Leave game" title="Leave game">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4H5v16h9M10 12h11M17 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="sfx-toggle" aria-pressed="true" aria-label="Sound effects" title="Sound on/off">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="on-waves" d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path class="off-slash" d="M3 3l18 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div id="banner" hidden></div>
+
+      <div class="actions" id="actions">
+        <div class="act-wrap" id="sab-wrap" hidden>
+          <div id="sab-menu" hidden>
+            <button type="button" id="sab-lights">Lights</button>
+            <button type="button" id="sab-reactor">Reactor</button>
+          </div>
+          <button type="button" class="act sab" id="act-sab">Sabotage<small>(F)</small><span class="cd" hidden></span></button>
+        </div>
+        <button type="button" class="act" id="act-vent" hidden>Vent<small>(V)</small></button>
+        <button type="button" class="act kill" id="act-kill" hidden>Kill<small>(Q)</small><span class="cd" hidden></span></button>
+        <button type="button" class="act report" id="act-report">Report<small>(R)</small></button>
+        <button type="button" class="act" id="act-use">Use<small>(E)</small></button>
+      </div>
+      <div class="keys" id="keys">Move: WASD / arrows</div>
+
+      <div class="overlay" id="intro" hidden>
+        <p id="intro-sub"></p>
+        <h2 id="intro-title"></h2>
+        <canvas id="intro-canvas" width="440" height="300"></canvas>
+        <p id="intro-note"></p>
+      </div>
+
+      <div class="overlay" id="splash" hidden>
+        <h2 id="splash-title"></h2>
+        <canvas id="splash-canvas" width="320" height="240"></canvas>
+        <p id="splash-sub"></p>
+      </div>
+
+      <div class="overlay" id="meeting" hidden>
+        <div class="meeting-panel">
+          <div class="meeting-head">
+            <h2>Who is The Imposter?</h2>
+            <span id="meeting-timer"></span>
+          </div>
+          <p id="meeting-sub"></p>
+          <div id="tiles"></div>
+          <div class="meeting-foot">
+            <span class="voice">🎙️ Talk it over on your voice call.</span>
+            <span class="skip-votes" id="skip-votes"></span>
+            <button type="button" class="btn secondary" id="confirm-vote" hidden>Vote</button>
+            <button type="button" class="btn outline" id="skip-btn" style="color:#10131f;border-color:#10131f">Skip vote</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="overlay" id="ejection" hidden>
+        <canvas id="eject-canvas" width="1032" height="645"></canvas>
+        <p id="eject-text"></p>
+      </div>
+
+      <div class="overlay" id="minigame" hidden>
+        <div class="mini-panel">
+          <h3 id="mini-title"></h3>
+          <canvas id="mini-canvas" width="960" height="680"></canvas>
+          <p id="mini-msg"></p>
+          <button type="button" id="mini-close" aria-label="Close task">×</button>
+        </div>
+      </div>
+
+      <div id="game-over" class="card" hidden>
+        <h3 id="game-over-title"></h3>
+        <p id="game-over-sub"></p>
+        <ul class="player-list" id="standings"></ul>
+        <button class="btn" id="again-btn">Play Again</button>
+        <button class="btn ghost" id="exit-btn">Back to Lobby</button>
+      </div>
+    </div>
+    <p id="game-hint"></p>
+  </div>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="config.js?v=__BUILD__"></script>
+  <script src="map.js?v=__BUILD__"></script>
+  <script src="engine.js?v=__BUILD__"></script>
+  <script src="net.js?v=__BUILD__"></script>
+  <script src="client.js?v=__BUILD__"></script>
+</body>
+</html>

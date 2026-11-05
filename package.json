@@ -1,0 +1,13 @@
+{
+  "name": "amongmates",
+  "version": "1.0.0",
+  "description": "Among Mates: social deduction for 2-8 mates plus crewmate NPCs, in the style of Among Us. Peer-to-peer, runs on GitHub Pages",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}
