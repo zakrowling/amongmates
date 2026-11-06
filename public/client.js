@@ -1564,7 +1564,12 @@
           if (tile) tile.append(dot(voter));
         }
       });
-      if ($('skip-votes').children.length) $('skip-votes').prepend('Skipped: ');
+      if ($('skip-votes').children.length) {
+        const label = document.createElement('span');
+        label.className = 'skip-label';
+        label.textContent = 'Skipped:';
+        $('skip-votes').prepend(label);
+      }
     }
   }
 
