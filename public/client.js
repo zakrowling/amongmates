@@ -707,9 +707,9 @@
   }
 
   function lobbyInfo(count) {
-    const bots = `Empty seats are filled with crewmate bots, 15 on board.`;
+    const bots = `Empty seats are filled with crewmate bots.`;
     if (count < 2) return `${bots} You need at least 2 players to start.`;
-    if (count < REAL_IMPOSTER_FROM) return `${bots} With fewer than ${REAL_IMPOSTER_FROM} players, one of the bots is The Imposter.`;
+    if (count < REAL_IMPOSTER_FROM) return `${bots} With fewer than ${REAL_IMPOSTER_FROM}, a bot is The Imposter.`;
     return `${bots} One of you is The Imposter...`;
   }
 
@@ -846,8 +846,9 @@
 
 
   // Apps that embed the game pass their own session id as ?group=<id> (any length or characters), so each
-  // group gets a private link room instead of everyone sharing /mate. The id is hashed into a valid room
-  // name ('G' + base 36), so ids of any shape work and never clash with typed 4-letter codes.
+  // group gets its own link room instead of everyone sharing /mate. The id is hashed into a 4-letter code
+  // like any other room (same letters, no I or O), so it can also be typed in to join.
+  const GROUP_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   function groupRoom(id) {
     if (!id) return null;
     let h1 = 0xdeadbeef;
@@ -859,8 +860,13 @@
     }
     h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
     h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    const hash = 4294967296 * (2097151 & h2) + (h1 >>> 0);
-    return `g${hash.toString(36)}`;
+    let hash = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    let code = '';
+    for (let i = 0; i < 4; i++) {
+      code += GROUP_LETTERS[hash % GROUP_LETTERS.length];
+      hash = Math.floor(hash / GROUP_LETTERS.length);
+    }
+    return code;
   }
   // Links like /amongmates/mate (or ?room=mate) open that room: join it if someone is hosting, otherwise host it.
   function enterRoomFromUrl() {
