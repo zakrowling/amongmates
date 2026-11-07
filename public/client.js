@@ -844,9 +844,28 @@
     setTimeout(() => { $('copy-btn').textContent = 'Copy'; }, 1500);
   });
 
+
+  // Apps that embed the game pass their own session id as ?group=<id> (any length or characters), so each
+  // group gets a private link room instead of everyone sharing /mate. The id is hashed into a valid room
+  // name ('G' + base 36), so ids of any shape work and never clash with typed 4-letter codes.
+  function groupRoom(id) {
+    if (!id) return null;
+    let h1 = 0xdeadbeef;
+    let h2 = 0x41c6ce57;
+    for (let i = 0; i < id.length; i++) {
+      const ch = id.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    const hash = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    return `g${hash.toString(36)}`;
+  }
   // Links like /amongmates/mate (or ?room=mate) open that room: join it if someone is hosting, otherwise host it.
   function enterRoomFromUrl() {
-    const requested = new URLSearchParams(location.search).get('room');
+    const params = new URLSearchParams(location.search);
+    const requested = params.get('room') || groupRoom(params.get('group'));
     if (!requested) return;
     if (!window.AmongmatesNet.normaliseRoomName(requested)) {
       history.replaceState(null, '', basePath());
