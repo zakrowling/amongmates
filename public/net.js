@@ -87,6 +87,9 @@
     let hostConn = null;
     let localId = null;
     let lastLobby = null; // client only: latest lobby, used to decide who takes over hosting
+    // Each create/join/enter bumps this; an older attempt that's still running (its timer, retries,
+    // backup rooms) stops as soon as it sees it's been replaced, and its answer is never delivered.
+    let attempt = 0;
     const conns = new Map(); // host only: playerId -> DataConnection
 
     function dispatch(ev, data) {
@@ -221,6 +224,7 @@
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (peer !== p) return;   // replaced by a newer attempt: leave its connection alone
         if (!res.ok) teardown();
         ack(res);
       };
@@ -273,24 +277,29 @@
 
     // Join the room if someone is hosting it, otherwise become its host. If the room's host can't be
     // reached, move on to the next backup slot rather than giving up.
-    function enterRoom(code, ack, preferredName, deadline = Date.now() + ENTER_ROOM_DEADLINE_MS, slot = 1) {
+    function enterRoom(code, ack, preferredName, deadline = Date.now() + ENTER_ROOM_DEADLINE_MS, slot = 1, mine = attempt) {
+      const stale = () => mine !== attempt;
+      if (stale()) return;
       const peerCode = slotCode(code, slot);
       const nextSlot = () => {
+        if (stale()) return;
         if (slot >= MAX_ROOM_SLOTS) return ack({ ok: false, error: HOST_UNREACHABLE });
         dispatch('status', "Couldn't reach the room's host. Opening a backup room...");
-        enterRoom(code, ack, preferredName, Date.now() + ENTER_ROOM_DEADLINE_MS, slot + 1);
+        enterRoom(code, ack, preferredName, Date.now() + ENTER_ROOM_DEADLINE_MS, slot + 1, mine);
       };
       joinRoom(peerCode, (res) => {
+        if (stale()) return;
         // Success, a real refusal (e.g. full), or PeerJS itself unreachable: nothing more to try.
         if (res.ok || res.timeout === 'server' || !(res.notFound || res.timeout)) return ack(res);
         // Someone holds this slot but we can't reach them: skip it.
         if (res.timeout === 'host') return nextSlot();
         createRoom((hostRes) => {
+          if (stale()) return;
           if (hostRes.ok || !hostRes.taken) return ack(hostRes);
           if (Date.now() > deadline) return nextSlot();
           // Someone else claimed the room at the same moment; join them instead.
           dispatch('status', 'Someone just opened the room. Joining them...');
-          setTimeout(() => enterRoom(code, ack, preferredName, deadline, slot), 800 + Math.random() * 700);
+          setTimeout(() => enterRoom(code, ack, preferredName, deadline, slot, mine), 800 + Math.random() * 700);
         }, 0, peerCode, preferredName);
       }, preferredName);
     }
@@ -307,11 +316,12 @@
       const myName = (((lobby && lobby.players) || []).find((p) => p.id === me) || {}).name;
       dispatch('reconnecting', 'The host left. Reconnecting...');
       const [base, slot] = splitSlot(code);
+      const mine = ++attempt;
       setTimeout(() => {
         enterRoom(base, (res) => {
           if (res.ok) dispatch('rejoined', res);
           else dispatch('disconnect', res.error || 'The room has closed.');
-        }, myName, undefined, slot);
+        }, myName, undefined, slot, mine);
       }, rank * HANDOVER_STAGGER_MS + Math.random() * 300);
     }
 
@@ -326,14 +336,18 @@
           emit(ev, ...args, ack);
         });
       }
-      if (ev === 'createRoom') return createRoom(ack);
-      if (ev === 'joinRoom') return joinRoom(String(args[0] || '').trim().toUpperCase(), ack);
-      if (ev === 'enterRoom') {
-        const name = normaliseRoomName(args[0]);
-        if (!name) return ack({ ok: false, error: 'Room names are 2-16 letters, numbers or dashes.' });
-        return enterRoom(name, ack);
+      if (ev === 'createRoom' || ev === 'joinRoom' || ev === 'enterRoom' || ev === 'leaveRoom') {
+        const mine = ++attempt;
+        const answer = (res) => { if (mine === attempt) ack(res); };
+        if (ev === 'createRoom') return createRoom(answer);
+        if (ev === 'joinRoom') return joinRoom(String(args[0] || '').trim().toUpperCase(), answer);
+        if (ev === 'enterRoom') {
+          const name = normaliseRoomName(args[0]);
+          if (!name) return answer({ ok: false, error: 'Room names are 2-16 letters, numbers or dashes.' });
+          return enterRoom(name, answer, undefined, undefined, 1, mine);
+        }
+        return teardown();
       }
-      if (ev === 'leaveRoom') return teardown();
 
       if (mode === 'host' && room) {
         if (ev === 'startGame') room.start(localId, args[0]);
