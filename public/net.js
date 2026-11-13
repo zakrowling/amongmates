@@ -8,6 +8,9 @@
 (function () {
   const PEER_PREFIX = 'amongmates-v1-';
   const CONNECT_TIMEOUT_MS = 12000;
+  // Once the matchmaking server's answered, how long to wait for the room's host before moving on.
+  const HOST_TIMEOUT_MS = 8000;
+  const GIVE_UP_MS = 60000;   // the longest anyone's left on "Connecting..."
   const SERVER_UNREACHABLE =
     "Couldn't reach the PeerJS matchmaking server. A work network, VPN or ad blocker may be blocking it.";
   const HOST_UNREACHABLE =
@@ -224,11 +227,11 @@
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        if (peer !== p) return;   // replaced by a newer attempt: leave its connection alone
+        if (peer && peer !== p) return;   // replaced by a newer attempt: leave its connection alone
         if (!res.ok) teardown();
         ack(res);
       };
-      const timer = setTimeout(
+      let timer = setTimeout(
         () => finish({ ok: false, timeout: stage, error: stage === 'server' ? SERVER_UNREACHABLE : HOST_UNREACHABLE }),
         CONNECT_TIMEOUT_MS,
       );
@@ -236,6 +239,8 @@
       p.on('open', () => {
         if (peer !== p) return;
         stage = 'host';
+        clearTimeout(timer);
+        timer = setTimeout(() => finish({ ok: false, timeout: 'host', error: HOST_UNREACHABLE }), HOST_TIMEOUT_MS);
         dispatch('status', 'Looking for the room...');
         const conn = p.connect(PEER_PREFIX + code, { reliable: true, serialization: 'json' });
         hostConn = conn;
@@ -260,9 +265,18 @@
         conn.on('close', () => {
           if (hostConn !== conn) return;
           if (mode === 'client') return handOver(code);
-          teardown();
-          finish({ ok: false, error: 'The host closed the connection.' });
+          finish({ ok: false, timeout: 'host', error: HOST_UNREACHABLE });
         });
+        // Direct connection failed outright (a firewall or VPN in the way): no point waiting out the timer.
+        const watchIce = () => {
+          const pc = conn.peerConnection;
+          if (!pc) return;
+          pc.addEventListener('iceconnectionstatechange', () => {
+            if (mode !== 'client' && pc.iceConnectionState === 'failed') finish({ ok: false, timeout: 'host', error: HOST_UNREACHABLE });
+          });
+        };
+        if (conn.peerConnection) watchIce();
+        else setTimeout(watchIce, 0);
       });
       p.on('error', (err) => {
         if (peer !== p) return;
@@ -338,7 +352,21 @@
       }
       if (ev === 'createRoom' || ev === 'joinRoom' || ev === 'enterRoom' || ev === 'leaveRoom') {
         const mine = ++attempt;
-        const answer = (res) => { if (mine === attempt) ack(res); };
+        let answered = false;
+        const answer = (res) => {
+          if (answered || mine !== attempt) return;
+          answered = true;
+          clearTimeout(guard);
+          ack(res);
+        };
+        // Whatever happens underneath (backup rooms, retries), never leave anyone waiting forever.
+        const guard = ev === 'leaveRoom' ? null : setTimeout(() => {
+          if (answered || mine !== attempt) return;
+          attempt++;
+          teardown();
+          answered = true;
+          ack({ ok: false, error: "Couldn't get into the room. Check your connection, then try again or enter a code." });
+        }, GIVE_UP_MS);
         if (ev === 'createRoom') return createRoom(answer);
         if (ev === 'joinRoom') return joinRoom(String(args[0] || '').trim().toUpperCase(), answer);
         if (ev === 'enterRoom') {
